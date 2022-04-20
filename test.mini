@@ -1,0 +1,65 @@
+import: time("std/time")
+import: game("lib/game")
+gir: gtk("Gtk", "3.0")
+gir: glib("GLib")
+gir: goo("GooCanvas")
+
+class: player(:handle, :item)
+
+let Game := game()
+
+gtk::init(nil, nil)
+let Window := gtk::Window("default-width" is 800, "default-height" is 600)
+let Canvas := goo::Canvas(scale is 5)
+
+with (W, H) := Game:size do
+	Canvas:set_bounds(-W / 2, -H / 2, W / 2, H / 2);
+end
+
+let Root := Canvas:get_root_item
+
+let Ball := goo::CanvasEllipse("radius-x" is 2, "radius-y" is 2)
+Root:add_child(Ball, -1)
+
+let Players := []
+
+with Player := player(Game:player(1), goo::CanvasEllipse("radius-x" is 5, "radius-y" is 5)) do
+	Root:add_child(Player:item, -1)
+	Players:put(Player)
+end
+
+Game:start
+
+let Start := time()
+var Base := 0
+
+print('Root = {type(Root)}\n')
+Root:connect("motion-notify-event"; Root, Target, Event) do
+	let Details := Event:motion
+	let X := Details:x_root, Y := Details:y_root
+	:>print('Motion -> {X}, {Y}\n')
+	Players[1]:handle:event(time() - Start, X, Y, game::action::None)
+	ret false
+end
+
+glib::timeout_add(0, 25;) do
+	let Time := time() - Start
+	print('Time = {Time}\n')
+	let State := Game:predict(Time)
+	print('State = {State}\n')
+	Ball::"center-x" := State[1][1]
+	Ball::"center-y" := State[1][2]
+	for (Player, PlayerState) in zip(Players, State skip 1, tuple) do
+		Player:item::"center-x" := PlayerState[1]
+		Player:item::"center-y" := PlayerState[2]
+	end
+	if Time - Base > 0.1 then
+		Game:rebase(Base := Time - 0.1)
+	end
+	ret true
+end
+
+Window:add(Canvas)
+Window:show_all
+
+gtk::main()
