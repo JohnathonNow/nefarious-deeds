@@ -1,4 +1,3 @@
-import: time("std/time")
 import: game("lib/game")
 gir: gtk("Gtk", "3.0")
 gir: glib("GLib")
@@ -12,21 +11,26 @@ gtk::init(nil, nil)
 let Window := gtk::Window("default-width" is 800, "default-height" is 600)
 let Canvas := goo::Canvas(scale is 5)
 
-with (W, H) := Game:size do
-	Canvas:set_bounds(-W / 2, -H / 2, W / 2, H / 2);
-end
+let (W, H) := Game:size
+Canvas:set_bounds(-W / 2, -H / 2, W / 2, H / 2)
 
 let Root := Canvas:get_root_item
+
+let Pitch := goo::CanvasRect(x is -W / 2, y is -H / 2, width is W, height is H)
+Root:add_child(Pitch, -1)
 
 let Ball := goo::CanvasEllipse("radius-x" is 2, "radius-y" is 2)
 Root:add_child(Ball, -1)
 
 let Players := []
 
-with Player := player(Game:player(1), goo::CanvasEllipse("radius-x" is 5, "radius-y" is 5)) do
-	Root:add_child(Player:item, -1)
-	Players:put(Player)
-end
+let Player1 := player(Game:player(1), goo::CanvasEllipse("radius-x" is 5, "radius-y" is 5))
+Root:add_child(Player1:item, -1)
+Players:put(Player1)
+
+let Player2 := player(Game:player(2), goo::CanvasEllipse("radius-x" is 5, "radius-y" is 5))
+Root:add_child(Player2:item, -1)
+Players:put(Player2)
 
 Game:start
 
@@ -38,24 +42,43 @@ Root:connect("motion-notify-event"; Root, Target, Event) do
 	let Details := Event:motion
 	let X := Details:x_root, Y := Details:y_root
 	:>print('Motion -> {X}, {Y}\n')
-	Players[1]:handle:event(time() - Start, X, Y, game::action::None)
+	Player1:handle:event(time() - Start, X, Y, game::action::Move)
+	ret false
+end
+
+Root:connect("button-release-event"; Root, Target, Event) do
+	Player1:handle:event(time() - Start, 0, 0, game::action::Kick)
 	ret false
 end
 
 glib::timeout_add(0, 25;) do
 	let Time := time() - Start
-	print('Time = {Time}\n')
+	:>print('Time = {Time}\n')
 	let State := Game:predict(Time)
 	print('State = {State}\n')
-	Ball::"center-x" := State[1][1]
-	Ball::"center-y" := State[1][2]
 	for (Player, PlayerState) in zip(Players, State skip 1, tuple) do
-		Player:item::"center-x" := PlayerState[1]
-		Player:item::"center-y" := PlayerState[2]
+		let Item := Player:item
+		Item::"center-x" := PlayerState[1]
+		Item::"center-y" := PlayerState[2]
+		Item::"stroke-color" := "black"
+	end
+	if let Handler := State[1][7] then
+		Players[Handler]:item::"stroke-color" := "red"
+		Ball::"stroke-color" := "white"
+	else
+		Ball::"stroke-color" := "black"
+		Ball::"center-x" := State[1][1]
+		Ball::"center-y" := State[1][2]
 	end
 	if Time - Base > 0.1 then
 		Game:rebase(Base := Time - 0.1)
 	end
+	if boolean::random(0.2) = true then
+		Player2:handle:event(Time, real::random(-W / 2, W / 2), real::random(-H / 2, H / 2), game::action::Move)
+	end
+	ret true
+on Error do
+	print('Error: {Error}\n')
 	ret true
 end
 
