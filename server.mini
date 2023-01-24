@@ -1,0 +1,214 @@
+import("log/zlog"): log()
+import: glib("gir/GLib")
+import: gobject("gir/GObject")
+import: soup("gir/Soup@3.0")
+import: json("fmt/json")
+import: uuid("util/uuid")
+import: engine("lib/engine")
+
+let Server := soup::Server()
+Server:listen_all(8081, nil)
+log::info("Server running on http://localhost:8081")
+
+fun get_params(Query, Message) do
+	if Query then ret Query end
+	let Headers := Message:get_request_headers
+	let Body := Message:get_request_body
+	let ContentType := Headers:get_one("content-type"):lower
+	if ContentType:starts("application/json") then
+		ret json::decode(Body:flatten:get_data[1])
+	elseif ContentType:starts("multipart/form-data") then
+		let Params := {}
+		let Multipart := soup::Multipart::new_from_message(Headers, Body)
+		for I in 0 .. (Multipart:get_length - 1) do
+			let (_, Headers, Body) := Multipart:get_part(I)
+			let Disposition := soup::header_parse_semi_param_list(Headers:get_one("content-disposition"):lower)
+			Params[Disposition["name"]] := Body:get_data[2]
+		end
+		ret Params
+	else
+		error("TypeError", 'Unsupported content type: {ContentType}')
+	end
+end
+
+def MimeTypes := {
+	"xhtml" is "application/xhtml+xml",
+	"js" is "text/javascript",
+	"css" is "text/css",
+	"ico" is "image/png"
+}
+
+let serve_static_content := for Arg in sys::Args do
+	until Arg = "--no-cache", fun(Message, Path, MimeType) do
+		log::info('Serving {Path} as {MimeType} without cache')
+		let Channel := glib::IOChannel::new_file(Path, "r")
+		Channel:set_encoding(nil)
+		let (_, Content, Length) := Channel:read_to_end
+		Channel:close
+		Message:set_response(MimeType, soup::MemoryUse::copy, Content)
+		Message:set_status(200, nil)
+	on Error do
+		log::error(Error)
+		Message:set_status(404, nil)
+	end
+else
+	fun(Message, Path, MimeType) do
+		log::info('Serving {Path} as {MimeType} with cache')
+		let Content := :({})[Path; Path] do
+			log::info('Reading {Path} into cache')
+			let Channel := glib::IOChannel::new_file(Path, "r")
+			Channel:set_encoding(nil)
+			let (_, Content, Length) := Channel:read_to_end
+			Channel:close
+			Content
+		end
+		Message:set_response(MimeType, soup::MemoryUse::static, Content)
+		Message:set_status(200, nil)
+	on Error do
+		log::error(Error)
+		Message:set_status(404, nil)
+	end
+end
+
+def StaticPath := glib::canonicalize_filename("static", nil)
+
+Server:add_handler("/"; Server, Message, Path, Query, Client) do
+	log::info('GET ', Path)
+	if Path = "/" then
+		ret serve_static_content(Message, StaticPath + "/index.xhtml", "application/xhtml+xml")
+	elseif let MimeType := MimeTypes[Path:after(".", -1)] then
+		let FullPath := glib::canonicalize_filename('{StaticPath}/{Path}', nil)
+		if FullPath:starts(StaticPath) then
+			ret serve_static_content(Message, FullPath, MimeType)
+		end
+	on Error do
+		log::error(Error)
+	end
+	Message:set_status(404)
+end
+
+class: player(:id, :socket, :name, :game, :engine, init is; Player, Id) do
+	Player:id := Id
+end
+
+class: game(:id, :engine, :name, :players, :owner, :password, :running, init is; Game, Owner, Name, Password) do
+	Game:id := "1" :>string(uuid())
+	Game:name := Name
+	Game:owner := Owner
+	Game:password := Password
+	Game:players := []
+	Game:engine := engine()
+end
+
+fun add_player(Game, Player, Team) do
+	Player:game := Game
+	Player:engine := Game:engine:player(Team)
+	Game:players:put(Player)
+end
+
+let Players := {}
+let Games := {}
+
+fun send_event(Socket, Event, Data) do
+	Socket:send_message(soup::WebsocketDataType::text, glib::Bytes::new(json::encode({Event is Data})))
+end
+
+fun start_game(Game) do
+	let Engine := Game:engine
+	Engine:start
+	Game:running := true
+	let Players := Game:players
+	Players:sort(; A, B) A:engine:index < B:engine:index
+	let PlayersInfo := list(Players; Player) [Player:name, Player:engine:team]
+	for Player in Players do
+		send_event(Player:socket, "game/start", [Player:engine:index, PlayersInfo])
+	end
+	let Start := time()
+	var Base := 0
+	glib::timeout_add(0, 250;) do
+		let Time := time() - Start
+		let State := Engine:predict(Time)
+		print('{State}\n')
+		for Player in Players do
+			send_event(Player:socket{}, "game/state", State)
+		end
+		let Rebase := Time - 1
+		if Rebase > Base then
+			Engine:rebase(Rebase)
+			Base := Rebase
+		end
+		ret Game:running
+	on Error do
+		log::error(Error)
+	end
+end
+
+fun stop_game(Game) do
+	Game:running := false
+	Game:engine := nil
+end
+
+fun handle_event(Player, Socket, Event, Data) do
+	switch Event: string
+	case "ping" do
+		send_event(Socket, "pong")
+	case "connect" do		
+		if let Game := Player:game then
+			send_event(Socket, "game/join", [Game:id, Game:name])
+			if Game:running = true then
+				let PlayersInfo := list(Game:players; Player) [Player:name, Player:engine:team]
+				send_event(Player:socket, "game/start", [Player:engine:index, PlayersInfo])
+			end
+		else
+			send_event(Socket, "game/list", map(Games, :name))
+		end
+	case "game/list" do
+		send_event(Socket, "game/list", map(Games, :name))
+	case "game/create" do
+		let Game := game(Player, Data["name"], Data["password"])
+		Games[Game:id] := Game
+		each Players -> :socket -> send_event(_, "game/create", [Game:id, Game:name])
+	case "game/start" do
+		let Game := Games[Data["game"]] or error("Error", "Invalid game")
+		Game:owner = Player or error("Error", "Invalid game")
+		start_game(Game)
+	case "game/join" do
+		let Game := Games[Data["game"]] or error("Error", "Invalid game")
+		Data["password"] = Game:password or error("Error", "Invalid password")
+		let Team := Data["team"] 
+		1 <= Team <= 2 or error("Error", "Invalid team")
+		add_player(Game, Player, Team)
+		send_event(Socket, "game/join", [Game:id, Game:name])
+		if let Owner := Player != Game:owner then
+			send_event(Owner:socket{}, "game/join", [Player:name])
+		end
+	case "game/leave" do
+	case "game/event" do
+		Player:engine{}:event(Data[1], Data[2], Data[3], engine::action::(Data[4]))
+	else
+		log::warn("Unhandled event ", Event)
+	end
+end
+
+Server:add_websocket_handler("/connect", nil, nil; Server, Message, Path, Socket) do
+	let Query := Message:get_uri:get_query
+	let Params := glib::uri_parse_params(Query, Query:length, "&", glib::UriParamsFlags::none)
+	log::info('Websocket connection on {Path} -> {Params}')
+	let Player := Players[Params["id"], player]
+	Player:socket := Socket
+	Socket:connect("message"; Socket, Type, Bytes) do
+		let (Event, Data) := first2(json::decode(Bytes:get_data[1]))
+		handle_event(Player, Socket, Event, Data)
+	on Error do
+		log::error(Error)
+	end
+	Socket:connect("closed"; Socket) do
+		if Player:socket = Socket then
+			Player:socket := nil
+		end
+	end
+	handle_event(Player, Socket, "connect", {})
+on Error do
+	log::error(Error)
+	Socket:close(soup::WebsocketCloseCode::server_error, string(Error))
+end

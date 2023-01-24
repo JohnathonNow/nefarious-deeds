@@ -1,0 +1,105 @@
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml"> 
+<head>
+	<meta charset="utf-8"/>
+	<style>
+		* {
+			box-sizing: border-box;
+		}
+
+		#banner {
+			margin-top: 150px;
+			margin-left: auto;
+			margin-right: auto;
+			width: 1080px;
+			height: 40px;
+			font-size: 40px;
+			line-height: 40px;;
+			text-align: center;
+		}
+
+		#score1 {
+			float: left;
+		}
+
+		#score2 {
+			float: right;
+		}
+
+		#pitch {
+			position: relative;
+			margin-top: 10px;
+			margin-left: auto;
+			margin-right: auto;
+			background-color: green;
+			width: 1080px;
+			height: 600px;
+		}
+
+		#pitch::before {
+			position: absolute;
+			left: -40px;
+			top: 240px;
+			bottom: 240px;
+			width: 40px;
+			border-top: 5px solid;
+			border-bottom: 5px solid;
+			border-left: 5px solid;
+			border-color: red;
+			content: " ";
+		}
+
+		#pitch::after {
+			position: absolute;
+			right: -40px;
+			top: 240px;
+			bottom: 240px;
+			width: 40px;
+			border-top: 5px solid;
+			border-bottom: 5px solid;
+			border-right: 5px solid;
+			border-color: blue;
+			content: " ";
+		}
+
+		.ball {
+			position: absolute;
+			width: 12px;
+			height: 12px;
+			border-radius: 6px;
+			background: white;
+		}
+
+		.player {
+			position: absolute;
+			width: 30px;
+			height: 30px;
+			border-radius: 15px;
+			text-align: center;
+			font-size: 30px;
+			line-height: 30px;;
+			color: white;
+		}
+
+		.player.team1 {
+			background: blue;
+		}
+
+		.player.team2 {
+			background: red;
+		}
+
+		.player.handler {
+			box-shadow: 0 0 0px 5px white;
+		}
+	</style>
+</head>
+<body>
+	<div id="banner">
+		<span id="score1"/>
+		<span id="gametime"/>
+		<span id="score2"/>
+	</div>
+	<div id="pitch"/>
+	<script src="/main.js"/>
+</body>
+</html>

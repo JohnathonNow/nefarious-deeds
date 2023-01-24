@@ -96,4 +96,4 @@ else
 	CFLAGS := old + ["-O3"]
 end
 
-DEFAULT[so_module("game.so", [file("game2.o")])]
+DEFAULT[so_module("engine.so", [file("engine.o")])]

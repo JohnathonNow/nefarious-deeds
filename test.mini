@@ -1,17 +1,17 @@
-import: game("lib/game")
+import: engine("lib/engine")
 gir: gtk("Gtk", "3.0")
 gir: glib("GLib")
 gir: goo("GooCanvas")
 
 class: player(:handle, :item)
 
-let Game := game()
+let Engine := engine()
 
 gtk::init(nil, nil)
 let Window := gtk::Window("default-width" is 800, "default-height" is 600)
 let Canvas := goo::Canvas(scale is 5)
 
-let (W, H) := Game:size
+let (W, H) := Engine:size
 Canvas:set_bounds(-W / 2, -H / 2, W / 2, H / 2)
 
 let Root := Canvas:get_root_item
@@ -22,17 +22,21 @@ Root:add_child(Pitch, -1)
 let Ball := goo::CanvasEllipse("radius-x" is 2, "radius-y" is 2)
 Root:add_child(Ball, -1)
 
+let Score := goo::CanvasText("x" is 0, "y" is 0, "anchor" is goo::CanvasAnchorType::center)
+Root:add_child(Score, -1)
+
 let Players := []
 
-let Player1 := player(Game:player(1), goo::CanvasEllipse("radius-x" is 5, "radius-y" is 5))
+let Player1 := player(Engine:player(1), goo::CanvasEllipse("radius-x" is 5, "radius-y" is 5))
 Root:add_child(Player1:item, -1)
 Players:put(Player1)
 
-let Player2 := player(Game:player(2), goo::CanvasEllipse("radius-x" is 5, "radius-y" is 5))
+let Player2 := player(Engine:player(2), goo::CanvasEllipse("radius-x" is 5, "radius-y" is 5))
 Root:add_child(Player2:item, -1)
 Players:put(Player2)
 
-Game:start
+Engine:start
+Players:sort(fun(A, B) A:handle:index < B:handle:index)
 
 let Start := time()
 var Base := 0
@@ -42,39 +46,46 @@ Root:connect("motion-notify-event"; Root, Target, Event) do
 	let Details := Event:motion
 	let X := Details:x_root, Y := Details:y_root
 	:>print('Motion -> {X}, {Y}\n')
-	Player1:handle:event(time() - Start, X, Y, game::action::Move)
+	Player1:handle:event(time() - Start, X, Y, engine::action::Move)
 	ret false
 end
 
 Root:connect("button-release-event"; Root, Target, Event) do
-	Player1:handle:event(time() - Start, 0, 0, game::action::Kick)
+	Player1:handle:event(time() - Start, 0, 0, engine::action::Kick)
 	ret false
 end
 
-glib::timeout_add(0, 25;) do
+glib::timeout_add(0, 250;) do
 	let Time := time() - Start
 	:>print('Time = {Time}\n')
-	let State := Game:predict(Time)
-	print('State = {State}\n')
-	for (Player, PlayerState) in zip(Players, State skip 1, tuple) do
+	let State := Engine:predict(Time)
+	print('{Time} -> {State}\n')
+	each zip(Players, State skip 3; Player, PlayerState) do
 		let Item := Player:item
 		Item::"center-x" := PlayerState[1]
 		Item::"center-y" := PlayerState[2]
 		Item::"stroke-color" := "black"
 	end
-	if let Handler := State[1][7] then
-		Players[Handler]:item::"stroke-color" := "red"
+	let BallState := State[3]
+	switch BallState: type
+	case integer do
+		Players[BallState]:item::"stroke-color" := "red"
 		Ball::"stroke-color" := "white"
-	else
+		Score::text := ""
+	case list do
 		Ball::"stroke-color" := "black"
-		Ball::"center-x" := State[1][1]
-		Ball::"center-y" := State[1][2]
+		Ball::"center-x" := BallState[1]
+		Ball::"center-y" := BallState[2]
+		Score::text := ""
+	else
+		Ball::"stroke-color" := "white"
+		Score::text := '{State[2]}'
 	end
-	if Time - Base > 0.1 then
-		Game:rebase(Base := Time - 0.1)
+	if Time - Base > 1 then
+		Engine:rebase(Base := Time - 1)
 	end
 	if boolean::random(0.2) = true then
-		Player2:handle:event(Time, real::random(-W / 2, W / 2), real::random(-H / 2, H / 2), game::action::Move)
+		Player2:handle:event(Time, real::random(-W / 2, W / 2), real::random(-H / 2, H / 2), engine::action::Move)
 	end
 	ret true
 on Error do

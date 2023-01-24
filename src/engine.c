@@ -26,9 +26,9 @@ static inline double dot(double2 A, double2 B) {
 
 struct event_t {
 	event_t *Next;
-	player_t *Player;
 	double2 Target;
 	double Time;
+	int Player;
 	action_t Action;
 };
 
@@ -39,11 +39,12 @@ typedef struct {
 } player_state_t;
 
 typedef struct {
-	struct {
-		int Handler;
-		double2 Position, Velocity, Friction;
-	} Ball;
 	double Time;
+	struct {
+		double2 Position, Velocity, Friction;
+		double Spawn;
+		int Handler;
+	} Ball;
 	int Score[2];
 	player_state_t Players[];
 } game_state_t;
@@ -55,6 +56,7 @@ struct game_t {
 	event_t *Events;
 	game_state_t *Base, *State;
 	int NumPlayers, StateSize;
+	int TeamSize[2];
 };
 
 struct player_t {
@@ -66,10 +68,10 @@ struct player_t {
 
 #define PITCH_WIDTH 180.0
 #define PITCH_HEIGHT 100.0
-#define GOAL_SIZE 25.0
+#define GOAL_SIZE 20.0
 
 #define BALL_RADIUS 1.0
-#define PLAYER_RADIUS 5.0
+#define PLAYER_RADIUS 3.0
 
 #define BALL_FRICTION 5.0
 #define BALL_KICK_SPEED 30.0
@@ -93,13 +95,19 @@ player_t *game_player(game_t *Game, int Team) {
 
 void game_start(game_t *Game) {
 	srand(time(0));
-	int NumPlayers = 0;
-	for (player_t *Player = Game->Players; Player; Player = Player->Next) Player->Index = NumPlayers++;
-	Game->NumPlayers = NumPlayers;
+	int *TeamSize = Game->TeamSize;
+	TeamSize[0] = TeamSize[1] = 0;
+	for (player_t *Player = Game->Players; Player; Player = Player->Next) {
+		Player->Index = TeamSize[Player->Team]++;
+	}
+	for (player_t *Player = Game->Players; Player; Player = Player->Next) {
+		if (Player->Team) Player->Index += TeamSize[0];
+	}
+	int NumPlayers = Game->NumPlayers = TeamSize[0] + TeamSize[1];
 	int StateSize = Game->StateSize = sizeof(game_state_t) + NumPlayers * sizeof(player_state_t);
 	game_state_t *State = Game->Base = (game_state_t *)snew(StateSize);
 	player_state_t *PlayerState = State->Players;
-	for (player_t *Player = Game->Players; Player; Player = Player->Next, ++PlayerState) {
+	for (int I = NumPlayers; --I >= 0; ++PlayerState) {
 		double2 Position = {
 			0.9 * PITCH_WIDTH * ((double)rand() / RAND_MAX - 0.5),
 			0.9 * PITCH_HEIGHT * ((double)rand() / RAND_MAX - 0.5)
@@ -107,6 +115,7 @@ void game_start(game_t *Game) {
 		PlayerState->Position = PlayerState->Target = Position;
 		PlayerState->Velocity = (double2){0, 0};
 	}
+	State->Ball.Spawn = 1.0;
 	State->Ball.Position = (double2){0, 0};
 	State->Ball.Velocity = (double2){0, 0};
 	State->Ball.Friction = (double2){0, 0};
@@ -135,7 +144,7 @@ void player_event(player_t *Player, double Time, double2 Target, action_t Action
 	} else {
 		EventCache = Event->Next;
 	}
-	Event->Player = Player;
+	Event->Player = Player->Index;
 	Event->Time = Time;
 	Event->Action = Action;
 	Event->Target = Target;
@@ -190,6 +199,7 @@ typedef enum {
 	UPDATE_BALL_WALL_X,
 	UPDATE_BALL_WALL_Y,
 	UPDATE_BALL_GOAL,
+	UPDATE_BALL_SPAWN,
 	UPDATE_PLAYER_BALL,
 	UPDATE_PLAYER_STOP_MOVING,
 	UPDATE_PLAYER_STOP_TURNING,
@@ -220,6 +230,7 @@ void game_predict(game_t *Game, double Target) {
 	memcpy(State, Game->Base, Game->StateSize);
 	double Time = State->Time;
 	event_t *Event = Game->Events;
+	int NumPlayers = Game->NumPlayers;
 	for (;;) {
 		double Delta = Target - Time;
 		update_t Update = UPDATE_NONE;
@@ -230,26 +241,16 @@ void game_predict(game_t *Game, double Target) {
 		// 2. Check for player events (collision / reaching target)
 		// 3. Check for next player event
 
-		// Check for ball stopping due to friction
-		if ((State->Ball.Handler < 0) && (State->Ball.Velocity[0] || State->Ball.Velocity[1])) {
-			int J = fabs(State->Ball.Friction[0]) < fabs(State->Ball.Friction[1]);
-			double T = State->Ball.Velocity[J] / State->Ball.Friction[J];
-			if (Delta > T) {
-				Delta = T;
-				Update = UPDATE_BALL_STOP;
-			}
-		}
-
 		// Check for players stopping due to reaching their target
-		for (player_t *Player = Game->Players; Player; Player = Player->Next) {
-			player_state_t *PlayerState = State->Players + Player->Index;
+		player_state_t *PlayerState = State->Players;
+		for (int I = NumPlayers; --I >= 0; ++PlayerState) {
 			if (PlayerState->Velocity[0] || PlayerState->Velocity[1]) {
 				int J = fabs(PlayerState->Velocity[0]) < fabs(PlayerState->Velocity[1]);
 				double T = (PlayerState->Target[J] - PlayerState->Position[J]) / PlayerState->Velocity[J];
 				if (Delta > T) {
 					Delta = T;
 					Update = UPDATE_PLAYER_STOP_MOVING;
-					UpdatePlayer = Player->Index;
+					UpdatePlayer = PlayerState - State->Players;
 				}
 			}
 			if (PlayerState->Rotation) {
@@ -257,7 +258,7 @@ void game_predict(game_t *Game, double Target) {
 				if (Delta > T) {
 					Delta = T;
 					Update = UPDATE_PLAYER_STOP_TURNING;
-					UpdatePlayer = Player->Index;
+					UpdatePlayer = PlayerState - State->Players;
 				}
 			}
 		}
@@ -271,12 +272,26 @@ void game_predict(game_t *Game, double Target) {
 			}
 		}
 
-		if (State->Ball.Handler >= 0) { // Player has ball
+		if (!isnan(State->Ball.Spawn)) {
+			// The ball is not in play yet
+			double T = State->Ball.Spawn - Time;
+			if (Delta > T) {
+				Delta = T;
+				Update = UPDATE_BALL_SPAWN;
+			}
+		} else if (State->Ball.Handler >= 0) {
+			// A player has the ball
 			// Check for other players colliding with handler
 			int Handler = State->Ball.Handler;
 			player_state_t *HandlerState = State->Players + Handler;
-			for (player_t *Player = Game->Players; Player; Player = Player->Next) if (Player->Index != Handler) {
-				player_state_t *PlayerState = State->Players + Player->Index;
+			int Count = Game->TeamSize[0];
+			if (Handler < Count) {
+				PlayerState = State->Players + Count;
+				Count = Game->TeamSize[1];
+			} else {
+				PlayerState = State->Players;
+			}
+			for (; --Count >= 0; ++PlayerState) {
 				if (PlayerState->Velocity[0] || PlayerState->Velocity[1]) {
 					//double2 PlayerInitial = PlayerState->Position;
 					//double2 PlayerFinal = PlayerInitial + Delta * PlayerState->Velocity;
@@ -308,11 +323,18 @@ void game_predict(game_t *Game, double Target) {
 					if (Delta > T) {
 						Delta = T;
 						Update = UPDATE_PLAYER_TACKLE;
-						UpdatePlayer = Player->Index;
+						UpdatePlayer = PlayerState - State->Players;
 					}
 				}
 			}
 		} else if (State->Ball.Velocity[0] || State->Ball.Velocity[1]) {
+			// Check for ball stopping due to friction
+			int J = fabs(State->Ball.Friction[0]) < fabs(State->Ball.Friction[1]);
+			double T = State->Ball.Velocity[J] / State->Ball.Friction[J];
+			if (Delta > T) {
+				Delta = T;
+				Update = UPDATE_BALL_STOP;
+			}
 			// Compute ball bounding boxes
 			double2 Initial = State->Ball.Position;
 			double2 Final = Initial + Delta * State->Ball.Velocity - 0.5 * Delta * Delta * State->Ball.Friction;
@@ -378,13 +400,12 @@ void game_predict(game_t *Game, double Target) {
 			}
 
 			// Check for ball colliding with player
-			for (player_t *Player = Game->Players; Player; Player = Player->Next) {
-				player_state_t *PlayerState = State->Players + Player->Index;
+			PlayerState = State->Players;
+			for (int I = NumPlayers; --I >= 0; ++PlayerState) {
 				if (PlayerState->Velocity[0] || PlayerState->Velocity[1]) {
 					//double2 PlayerInitial = PlayerState->Position;
 					//double2 PlayerFinal = PlayerInitial + Delta * PlayerState->Velocity;
 					// TODO: Rough check for possible collision
-
 					double2 DX = State->Ball.Position - PlayerState->Position;
 					double2 DV = State->Ball.Velocity - PlayerState->Velocity;
 					double2 F = State->Ball.Friction;
@@ -398,11 +419,10 @@ void game_predict(game_t *Game, double Target) {
 					if (Delta > T) {
 						Delta = T;
 						Update = UPDATE_PLAYER_BALL;
-						UpdatePlayer = Player->Index;
+						UpdatePlayer = PlayerState - State->Players;
 					}
 				} else {
 					// TODO: Rough check for possible collision
-
 					double2 DX = State->Ball.Position - PlayerState->Position;
 					double2 DV = State->Ball.Velocity;
 					double2 F = State->Ball.Friction;
@@ -417,14 +437,14 @@ void game_predict(game_t *Game, double Target) {
 					if (Delta > T) {
 						Delta = T;
 						Update = UPDATE_PLAYER_BALL;
-						UpdatePlayer = Player->Index;
+						UpdatePlayer = PlayerState - State->Players;
 					}
 				}
 			}
 		} else { // Ball is currently stationary
 			// Check for players colliding with ball
-			for (player_t *Player = Game->Players; Player; Player = Player->Next) {
-				player_state_t *PlayerState = State->Players + Player->Index;
+			PlayerState = State->Players;
+			for (int I = NumPlayers; --I >= 0; ++PlayerState) {
 				if (PlayerState->Velocity[0] || PlayerState->Velocity[1]) {
 					//double2 PlayerInitial = PlayerState->Position;
 					//double2 PlayerFinal = PlayerInitial + Delta * PlayerState->Velocity;
@@ -441,7 +461,7 @@ void game_predict(game_t *Game, double Target) {
 					if (Delta > T) {
 						Delta = T;
 						Update = UPDATE_PLAYER_BALL;
-						UpdatePlayer = Player->Index;
+						UpdatePlayer = PlayerState - State->Players;
 					}
 				}
 			}
@@ -487,9 +507,14 @@ void game_predict(game_t *Game, double Target) {
 			break;
 		}
 		case UPDATE_BALL_GOAL: {
-			int Team = State->Ball.Velocity[0] > 0;
+			int Team = State->Ball.Velocity[0] < 0;
 			State->Score[Team] += 1;
+			State->Ball.Spawn = Time + 1;
 			printf("Goal! %d @ %f\n", Team, Time);
+			break;
+		}
+		case UPDATE_BALL_SPAWN: {
+			State->Ball.Spawn = NAN;
 			State->Ball.Position = (double2){0, 0};
 			State->Ball.Velocity = (double2){0, 0};
 			State->Ball.Friction = (double2){0, 0};
@@ -534,7 +559,7 @@ void game_predict(game_t *Game, double Target) {
 			break;
 		}
 		case UPDATE_PLAYER_EVENT: {
-			player_state_t *PlayerState = State->Players + Event->Player->Index;
+			player_state_t *PlayerState = State->Players + Event->Player;
 			switch (Event->Action) {
 			case ACTION_NONE: break;
 			case ACTION_MOVE: {
@@ -542,7 +567,7 @@ void game_predict(game_t *Game, double Target) {
 				double Distance = sqrt(dot(Direction, Direction));
 				if (Distance > 1e-10) {
 					PlayerState->Target = Event->Target;
-					if (State->Ball.Handler == Event->Player->Index) {
+					if (State->Ball.Handler == Event->Player) {
 						PlayerState->Velocity = Direction * (PLAYER_DRIBBLE_SPEED / Distance);
 					} else {
 						PlayerState->Velocity = Direction * (PLAYER_RUN_SPEED / Distance);
@@ -551,7 +576,7 @@ void game_predict(game_t *Game, double Target) {
 				break;
 			}
 			case ACTION_KICK: {
-				if (State->Ball.Handler == Event->Player->Index) {
+				if (State->Ball.Handler == Event->Player) {
 					State->Ball.Handler = -1;
 					State->Ball.Position = PlayerState->Position + PlayerState->Velocity * ((PLAYER_RADIUS + BALL_RADIUS) / PLAYER_DRIBBLE_SPEED);
 					State->Ball.Velocity = PlayerState->Velocity * (BALL_KICK_SPEED / PLAYER_DRIBBLE_SPEED);
@@ -611,9 +636,21 @@ ML_METHOD("start", GameT) {
 
 ML_METHOD("player", GameT, MLIntegerT) {
 	game_t *Game = (game_t *)Args[0];
-	player_t *Player = game_player(Game, ml_integer_value(Args[1]));
+	int Team = ml_integer_value(Args[1]);
+	if (Team != 1 && Team != 2) return ml_error("ValueError", "Invalid team number");
+	player_t *Player = game_player(Game, Team - 1);
 	Player->Type = PlayerT;
 	return (ml_value_t *)Player;
+}
+
+ML_METHOD("team", PlayerT) {
+	player_t *Player = (player_t *)Args[0];
+	return ml_integer(Player->Team + 1);
+}
+
+ML_METHOD("index", PlayerT) {
+	player_t *Player = (player_t *)Args[0];
+	return ml_integer(Player->Index);
 }
 
 ML_METHOD("event", PlayerT, MLRealT, MLRealT, MLRealT, ActionT) {
@@ -628,32 +665,47 @@ ML_METHOD("predict", GameT, MLRealT) {
 	game_predict(Game, ml_real_value(Args[1]));
 	game_state_t *State = Game->State;
 	ml_value_t *Result = ml_list();
-	ml_list_put(Result, ml_tuplev(7,
-		ml_real(State->Ball.Position[0]), ml_real(State->Ball.Position[1]),
-		ml_real(State->Ball.Velocity[0]), ml_real(State->Ball.Velocity[1]),
-		ml_real(State->Ball.Friction[0]), ml_real(State->Ball.Friction[1]),
-		State->Ball.Handler >= 0 ? ml_integer(State->Ball.Handler + 1) : MLNil
-	));
 	player_state_t *PlayerState = State->Players;
-	for (player_t *Player = Game->Players; Player; Player = Player->Next, ++PlayerState) {
-		ml_list_put(Result, ml_tuplev(6,
-			ml_real(PlayerState->Position[0]), ml_real(PlayerState->Position[1]),
-			ml_real(PlayerState->Velocity[0]), ml_real(PlayerState->Velocity[1]),
-			ml_real(PlayerState->Target[0]), ml_real(PlayerState->Target[1])
-		));
+	for (int I = Game->NumPlayers; --I >= 0; ++PlayerState) {
+		ml_value_t *PlayerResult = ml_list();
+		ml_list_put(PlayerResult, ml_real(PlayerState->Position[0]));
+		ml_list_put(PlayerResult, ml_real(PlayerState->Position[1]));
+		ml_list_put(PlayerResult, ml_real(PlayerState->Velocity[0]));
+		ml_list_put(PlayerResult, ml_real(PlayerState->Velocity[1]));
+		ml_list_put(PlayerResult, ml_real(PlayerState->Target[0]));
+		ml_list_put(PlayerResult, ml_real(PlayerState->Target[1]));
+		ml_list_put(Result, PlayerResult);
 	}
-	ml_list_put(Result, ml_tuplev(2, ml_integer(State->Score[0]), ml_integer(State->Score[1])));
+	if (!isnan(State->Ball.Spawn)) {
+		ml_list_push(Result, MLNil);
+	} else if (State->Ball.Handler >= 0) {
+		ml_list_push(Result, ml_integer(State->Ball.Handler + 1));
+	} else {
+		ml_value_t *BallResult = ml_list();
+		ml_list_put(BallResult, ml_real(State->Ball.Position[0]));
+		ml_list_put(BallResult, ml_real(State->Ball.Position[1]));
+		ml_list_put(BallResult, ml_real(State->Ball.Velocity[0]));
+		ml_list_put(BallResult, ml_real(State->Ball.Velocity[1]));
+		ml_list_put(BallResult, ml_real(State->Ball.Friction[0]));
+		ml_list_put(BallResult, ml_real(State->Ball.Friction[1]));
+		ml_list_push(Result, BallResult);
+	}
+	ml_value_t *ScoreResult = ml_list();
+	ml_list_put(ScoreResult, ml_integer(State->Score[0]));
+	ml_list_put(ScoreResult, ml_integer(State->Score[1]));
+	ml_list_push(Result, ScoreResult);
+	ml_list_push(Result, ml_real(State->Time));
 	return Result;
 }
 
 ML_METHOD("rebase", GameT, MLRealT) {
 	game_t *Game = (game_t *)Args[0];
 	game_rebase(Game, ml_real_value(Args[1]));
-	return (ml_value_t *)Game;
+	return Args[1];
 }
 
 void ml_library_entry0(ml_value_t **Slot) {
-#include "game2_init.c"
+#include "engine_init.c"
 	stringmap_insert(GameT->Exports, "player", PlayerT);
 	stringmap_insert(GameT->Exports, "action", ActionT);
 	Slot[0] = (ml_value_t *)GameT;
