@@ -6,6 +6,7 @@ let pitch = document.getElementById("pitch");
 let score1 = document.getElementById("score1");
 let score2 = document.getElementById("score2");
 let gametime = document.getElementById("gametime");
+let ready = document.getElementById("ready");
 let events = {};
 let ping, lag = 0;
 let players = [];
@@ -73,18 +74,35 @@ document.body.addEventListener("mousedown", function(event) {
 	send("game/event", [time - lag, x, y, "Kick"]);
 });
 
+document.getElementById("create").onclick = function() {
+	send("game/create", {name: "Game", password: "1"});
+};
+
+document.getElementById("start").onclick = function() {
+	send("game/start", {game: "1"});
+};
+
+document.getElementById("join").onclick = function() {
+	let name = prompt("Player Name");
+	send("game/join", {game: "1", name, password: "1"});
+};
+
 events["pong"] = function(data) {
 	lag = (Date.now() - ping) / 2000;
 	console.log("delay", lag);
 }
 
+logs = document.getElementById("logs");
+
 events["game/create"] = function(data) {
+	logs.appendChild(document.createTextNode("Game created\n"));
 }
 
 events["game/list"] = function(data) {
 };
 
 events["game/join"] = function(data) {
+	logs.appendChild(document.createTextNode(`Player ${data[0]} joined team ${data[1]}\n`));
 };
 
 function tick() {
@@ -103,18 +121,25 @@ function tick() {
 	let handler = ball.handler;
 	if (handler == -1) {
 		style.display = null;
+		ready.style.display = "none";
 		style.left = (ball.x + dt * ball.dx + 90) * 6 - 6 + "px";
 		style.top = (ball.y + dt * ball.dy + 50) * 6 - 6 + "px";
 	} else {
 		style.display = "none";
-		if (handler >= 0) players[handler].element.classList.add("handler");
+		if (handler >= 0) {
+			players[handler].element.classList.add("handler");
+		} else {
+			ready.style.display = null;
+		}
 	}
 }
 
 events["game/start"] = function(data) {
+	logs.appendChild(document.createTextNode("Game started\n"));
 	for (let element = pitch.firstChild; element; element = pitch.firstChild) {
 		pitch.removeChild(element);
 	}
+	pitch.appendChild(ready);
 	let index = data[0];
 	players = data[1].map((info, i) => {
 		let name = info[0];

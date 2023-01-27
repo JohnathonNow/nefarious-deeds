@@ -136,6 +136,7 @@ void player_event(player_t *Player, double Time, double2 Target, action_t Action
 	game_t *Game = Player->Game;
 	// Add a player action (movement and/or kick) to game events.
 	// If time is older than last base game state, action is discarded.
+	if (!Game->Base) return;
 	if (Time <= Game->Base->Time) return;
 	//if (Time > Game->MaxTime) return;
 	event_t *Event = EventCache;

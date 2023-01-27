@@ -7,7 +7,6 @@
 		}
 
 		#banner {
-			margin-top: 150px;
 			margin-left: auto;
 			margin-right: auto;
 			width: 1080px;
@@ -61,6 +60,18 @@
 			content: " ";
 		}
 
+		#pitch > #ready {
+			position: absolute;
+			width: 180px;
+			left: 450px;
+			height: 30px;
+			top: 285px;
+			font-size: 25px;
+			color: white;
+			font-style: italic;
+			text-align: center;
+		}
+
 		.ball {
 			position: absolute;
 			width: 12px;
@@ -91,6 +102,10 @@
 		.player.handler {
 			box-shadow: 0 0 0px 5px white;
 		}
+
+		#logs {
+			white-space: pre-wrap;
+		}
 	</style>
 </head>
 <body>
@@ -99,7 +114,13 @@
 		<span id="gametime"/>
 		<span id="score2"/>
 	</div>
-	<div id="pitch"/>
+	<div id="pitch"><div id="ready">Get Ready!</div></div>
+	<div>
+		<button id="create">Create</button>
+		<button id="join">Join</button>
+		<button id="start">Start</button>
+	</div>
+	<div id="logs"/>
 	<script src="/main.js"/>
 </body>
 </html>

@@ -175,12 +175,20 @@ fun handle_event(Player, Socket, Event, Data) do
 	case "game/join" do
 		let Game := Games[Data["game"]] or error("Error", "Invalid game")
 		Data["password"] = Game:password or error("Error", "Invalid password")
-		let Team := Data["team"] 
+		let Team := Data["team"] or do
+			let Counts := {1 is 0, 2 is 0} + count2(Game:players, :engine, :team)
+			min2(Counts)[1]
+		end
 		1 <= Team <= 2 or error("Error", "Invalid team")
+		if let Name := Data["name"] then
+			Player:name := Name
+		end
+		for Other in Game:players do
+			send_event(Socket, "game/join", [Other:name, Other:engine:team])
+		end
 		add_player(Game, Player, Team)
-		send_event(Socket, "game/join", [Game:id, Game:name])
-		if let Owner := Player != Game:owner then
-			send_event(Owner:socket{}, "game/join", [Player:name])
+		for Other in Game:players do
+			send_event(Other:socket, "game/join", [Player:name, Team])
 		end
 	case "game/leave" do
 	case "game/event" do
